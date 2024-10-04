@@ -519,8 +519,6 @@ func main() {
         os.Exit(1)
     }
 
-    fmt.Println(config)
-
     // Инициализируем Telegram бота
     bot, err := tgbotapi.NewBotAPI(config.TelegramBotToken)
     if err != nil {
