@@ -20,6 +20,7 @@ import (
 
 // Структура для хранения настроек из config.yaml
 type Config struct {
+    ApiURL           string   `yaml:"api_url"`
     APIKey           string   `yaml:"api_key"`
     TelegramBotToken string   `yaml:"telegram_bot_token"`
     FilesPath        string   `yaml:"files_path"`
@@ -31,7 +32,6 @@ type Config struct {
 
 var (
     config Config
-    apiURL = "https://api.proxyapi.ru/openai/v1/" // URL для запросов к OpenAI
 )
 
 // Функция для чтения конфигурационного файла
@@ -88,7 +88,7 @@ func createAssistant() (string, error) {
         return "", err
     }
 
-    req, err := http.NewRequest("POST", apiURL+"assistants", bytes.NewBuffer(reqBody))
+    req, err := http.NewRequest("POST", config.ApiURL+"assistants", bytes.NewBuffer(reqBody))
     if err != nil {
         return "", err
     }
@@ -154,7 +154,7 @@ func uploadFile(filePath string) (string, error) {
 
     w.Close()
 
-    req, err := http.NewRequest("POST", apiURL+"files", &b)
+    req, err := http.NewRequest("POST", config.ApiURL+"files", &b)
     if err != nil {
         return "", err
     }
@@ -202,7 +202,7 @@ func uploadFile(filePath string) (string, error) {
 // Функция для создания Vector Store и загрузки файлов
 func createVectorStoreAndUploadFiles() (string, error) {
     // Создаем Vector Store
-    req, err := http.NewRequest("POST", apiURL+"vector_stores", nil)
+    req, err := http.NewRequest("POST", config.ApiURL+"vector_stores", nil)
     if err != nil {
         return "", err
     }
@@ -273,7 +273,7 @@ func registerFileInVectorStore(vectorStoreID, fileID string) error {
         return fmt.Errorf("Ошибка формирования тела запроса для регистрации файла: %v", err)
     }
 
-    req, err := http.NewRequest("POST", apiURL+"vector_stores/"+vectorStoreID+"/files", bytes.NewBuffer(reqBody))
+    req, err := http.NewRequest("POST", config.ApiURL+"vector_stores/"+vectorStoreID+"/files", bytes.NewBuffer(reqBody))
     if err != nil {
         return err
     }
@@ -320,7 +320,7 @@ func updateAssistantWithVectorStore(assistantID, vectorStoreID string) error {
         return err
     }
 
-    req, err := http.NewRequest("POST", apiURL+"assistants/"+assistantID, bytes.NewBuffer(reqBody))
+    req, err := http.NewRequest("POST", config.ApiURL+"assistants/"+assistantID, bytes.NewBuffer(reqBody))
     if err != nil {
         return err
     }
@@ -445,7 +445,7 @@ func createAndRunAssistantWithStreaming(assistantID, query, vectorStoreID string
         return "", fmt.Errorf("Ошибка создания тела запроса: %v", err)
     }
 
-    req, err := http.NewRequest("POST", apiURL+"threads/runs", bytes.NewBuffer(reqBody))
+    req, err := http.NewRequest("POST", config.ApiURL+"threads/runs", bytes.NewBuffer(reqBody))
     if err != nil {
         return "", fmt.Errorf("Ошибка создания HTTP-запроса: %v", err)
     }
@@ -518,6 +518,8 @@ func main() {
         slog.Error("Ошибка загрузки конфигурации", "error", err)
         os.Exit(1)
     }
+
+    fmt.Println(config)
 
     // Инициализируем Telegram бота
     bot, err := tgbotapi.NewBotAPI(config.TelegramBotToken)
