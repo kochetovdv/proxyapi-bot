@@ -1,3 +1,4 @@
+api_url: https://api.proxyapi.ru/openai/v1/
 api_key: [YOUR-API-KEY]
 telegram_bot_token: [YOUR-TELEGRAM-BOT-TOKEN]
 files_path: upload
