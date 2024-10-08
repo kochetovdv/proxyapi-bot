@@ -359,72 +359,81 @@ func updateAssistantWithVectorStore(assistantID, vectorStoreID string) error {
 }
 
 func listenToSSEStream(resp *http.Response) (string, error) {
-	defer resp.Body.Close()
+    defer resp.Body.Close()
 
-	reader := bufio.NewReader(resp.Body)
-	var finalMessage string
+    reader := bufio.NewReader(resp.Body)
+    var finalMessage string
 
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", fmt.Errorf("Ошибка чтения события: %v", err)
-		}
+    for {
+        line, err := reader.ReadString('\n')
+        if err != nil {
+            if err == io.EOF {
+                break
+            }
+            return "", fmt.Errorf("Ошибка чтения события: %v", err)
+        }
 
-		line = strings.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
+        line = strings.TrimSpace(line)
+        if len(line) == 0 || !strings.HasPrefix(line, "data: ") {
+            continue
+        }
 
-		// Проверяем, начинается ли строка с 'data: '
-		if strings.HasPrefix(line, "data: ") {
-			eventData := line[6:] // Убираем "data: "
+        eventData := line[6:] // Убираем "data: "
 
-			if eventData == "[DONE]" {
-				slog.Debug("Ответ полностью получен")
-				break
-			}
+        if eventData == "[DONE]" {
+            slog.Debug("Ответ полностью получен")
+            break
+        }
 
-			var event map[string]interface{}
-			if err := json.Unmarshal([]byte(eventData), &event); err != nil {
-				slog.Error("Ошибка разбора события", "error", err)
-				continue
-			}
+        var event map[string]interface{}
+        if err := json.Unmarshal([]byte(eventData), &event); err != nil {
+            slog.Error("Ошибка разбора события", "error", err)
+            continue
+        }
 
-			// Если это событие завершения сообщения (thread.message.delta)
-			if obj, ok := event["object"].(string); ok && obj == "thread.message.delta" {
-				if delta, ok := event["delta"].(map[string]interface{}); ok {
-					if content, ok := delta["content"].([]interface{}); ok {
-						for _, part := range content {
-							if textPart, ok := part.(map[string]interface{}); ok {
-								if text, ok := textPart["text"].(map[string]interface{}); ok {
-									if value, ok := text["value"].(string); ok {
-										finalMessage += value
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+        obj, ok := getString(event, "object")
+        if !ok {
+            continue
+        }
 
-			// Проверка на завершение сообщения
-			if obj, ok := event["object"].(string); ok && obj == "thread.message.completed" {
-				slog.Debug("Сообщение ассистента завершено")
-				break
-			}
-		}
-	}
+        switch obj {
+        case "thread.message.delta":
+            delta, ok := getMap(event, "delta")
+            if !ok {
+                continue
+            }
+            content, ok := getArray(delta, "content")
+            if !ok {
+                continue
+            }
+            for _, part := range content {
+                textPart, ok := part.(map[string]interface{})
+                if !ok {
+                    continue
+                }
+                text, ok := getMap(textPart, "text")
+                if !ok {
+                    continue
+                }
+                value, ok := getString(text, "value")
+                if !ok {
+                    continue
+                }
+                finalMessage += value
+            }
+        case "thread.message.completed":
+            slog.Debug("Сообщение ассистента завершено")
+            break
+        }
+    }
 
-	slog.Debug("Собранное сообщение от ассистента", "message", finalMessage)
+    slog.Debug("Собранное сообщение от ассистента", "message", finalMessage)
 
-	if finalMessage == "" {
-		return "", fmt.Errorf("Пустой ответ от ассистента")
-	}
+    if finalMessage == "" {
+        return "", fmt.Errorf("Пустой ответ от ассистента")
+    }
 
-	return finalMessage, nil
+    return finalMessage, nil
 }
 
 // createAndRunAssistantWithStreaming создаёт поток и запускает ассистента с обработкой SSE
@@ -574,4 +583,30 @@ func main() {
 
 	// Обработка запросов от Telegram пользователей
 	handleTelegramUpdates(bot, assistantID, vectorStoreID)
+}
+
+
+// Вспомогательные функции для получения значений
+func getString(m map[string]interface{}, key string) (string, bool) {
+    if val, ok := m[key]; ok {
+        str, ok := val.(string)
+        return str, ok
+    }
+    return "", false
+}
+
+func getMap(m map[string]interface{}, key string) (map[string]interface{}, bool) {
+    if val, ok := m[key]; ok {
+        m2, ok := val.(map[string]interface{})
+        return m2, ok
+    }
+    return nil, false
+}
+
+func getArray(m map[string]interface{}, key string) ([]interface{}, bool) {
+    if val, ok := m[key]; ok {
+        arr, ok := val.([]interface{})
+        return arr, ok
+    }
+    return nil, false
 }
