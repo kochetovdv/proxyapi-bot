@@ -9,6 +9,8 @@
 - Интеграция с Telegram для взаимодействия с пользователями.
 - Загрузка и использование пользовательских файлов для расширения знаний ассистента.
 - Обработка пользовательских запросов в реальном времени с использованием SSE (Server-Sent Events).
+- Сохранение контекста.
+- Многопоточная обработка сообщений.
 
 ## Требования
 - **Go** версии 1.16 или выше.
@@ -34,15 +36,16 @@ go get gopkg.in/yaml.v2
 ## Настройка
 1.	**Создайте файл конфигурации *config.yaml* или отредактируйте существующий файл в корневой директории проекта:**
 ```yaml
-api_url: https://api.proxyapi.ru/openai/v1/
+api_url: https://api.proxyapi.ru/openai/v1/ # URL доступа к API. Замените на https://api.openai.com/v1/ для доступа напрямую к OpenAI
 api_key: [YOUR-API-KEY]
 telegram_bot_token: [YOUR-TELEGRAM-BOT-TOKEN]
-files_path: upload
-name: [YOUR-ASSISTANT-NAME]
-instructions: [YOUR-ASSISTANT-INSTRUCTIONS]
-model: gpt-4-turbo
+files_path: upload # Путь к директории с файлами
+name: [YOUR-ASSISTANT-NAME] # Название ассистента
+instructions: [YOUR-ASSISTANT-INSTRUCTIONS] # Инструкции для ассистента
+model: gpt-4-turbo # Модель для ассистента
 tools:
   - file_search
+max_context_messages: 10  # Максимальное количество сообщений в контексте
 ```
 **Важно**: 
 - Замените api_url на "https://api.openai.com/v1/" при наличии личного кабинета в OpenAI или на ссылку иного proxy-сервиса.
