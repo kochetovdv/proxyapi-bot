@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	yaml "gopkg.in/yaml.v2"
@@ -20,39 +21,46 @@ import (
 
 // Структура для хранения настроек из config.yaml
 type Config struct {
-	ApiURL           string   `yaml:"api_url"`
-	APIKey           string   `yaml:"api_key"`
-	TelegramBotToken string   `yaml:"telegram_bot_token"`
-	FilesPath        string   `yaml:"files_path"`
-	Name             string   `yaml:"name"`
-	Instructions     string   `yaml:"instructions"`
-	Model            string   `yaml:"model"`
-	Tools            []string `yaml:"tools"`
+    ApiURL           string   `yaml:"api_url"`
+    APIKey           string   `yaml:"api_key"`
+    TelegramBotToken string   `yaml:"telegram_bot_token"`
+    FilesPath        string   `yaml:"files_path"`
+    Name             string   `yaml:"name"`
+    Instructions     string   `yaml:"instructions"`
+    Model            string   `yaml:"model"`
+    Tools            []string `yaml:"tools"`
+    MaxContextMessages int    `yaml:"max_context_messages"`
 }
 
 type UserSession struct {
+    mu       sync.Mutex
     Messages []map[string]interface{}
 }
 
 var (
-	config Config
-	userSessions = make(map[int64]*UserSession)
+    config       Config
+    userSessions = make(map[int64]*UserSession)
+    sessionsMu   sync.RWMutex
 )
-
 
 // Функция для чтения конфигурационного файла
 func loadConfig(configPath string) error {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("Ошибка чтения файла конфигурации: %v", err)
-	}
+    data, err := os.ReadFile(configPath)
+    if err != nil {
+        return fmt.Errorf("Ошибка чтения файла конфигурации: %v", err)
+    }
 
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return fmt.Errorf("Ошибка разбора файла конфигурации: %v", err)
-	}
+    err = yaml.Unmarshal(data, &config)
+    if err != nil {
+        return fmt.Errorf("Ошибка разбора файла конфигурации: %v", err)
+    }
 
-	return nil
+    // Проверим, что значение MaxContextMessages задано корректно
+    if config.MaxContextMessages <= 0 {
+        config.MaxContextMessages = 10 // Значение по умолчанию, если не задано или неверно
+    }
+
+    return nil
 }
 
 type AssistantCreateRequest struct {
@@ -359,123 +367,123 @@ func updateAssistantWithVectorStore(assistantID, vectorStoreID string) error {
 }
 
 func listenToSSEStream(resp *http.Response) (string, error) {
-    defer resp.Body.Close()
+	defer resp.Body.Close()
 
-    reader := bufio.NewReader(resp.Body)
-    var finalMessage string
+	reader := bufio.NewReader(resp.Body)
+	var finalMessage string
 
-    for {
-        line, err := reader.ReadString('\n')
-        if err != nil {
-            if err == io.EOF {
-                break
-            }
-            return "", fmt.Errorf("Ошибка чтения события: %v", err)
-        }
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("Ошибка чтения события: %v", err)
+		}
 
-        line = strings.TrimSpace(line)
-        if len(line) == 0 || !strings.HasPrefix(line, "data: ") {
-            continue
-        }
+		line = strings.TrimSpace(line)
+		if len(line) == 0 || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
 
-        eventData := line[6:] // Убираем "data: "
+		eventData := line[6:] // Убираем "data: "
 
-        if eventData == "[DONE]" {
-            slog.Debug("Ответ полностью получен")
-            break
-        }
+		if eventData == "[DONE]" {
+			slog.Debug("Ответ полностью получен")
+			break
+		}
 
-        var event map[string]interface{}
-        if err := json.Unmarshal([]byte(eventData), &event); err != nil {
-            slog.Error("Ошибка разбора события", "error", err)
-            continue
-        }
+		var event map[string]interface{}
+		if err := json.Unmarshal([]byte(eventData), &event); err != nil {
+			slog.Error("Ошибка разбора события", "error", err)
+			continue
+		}
 
-        obj, ok := getString(event, "object")
-        if !ok {
-            continue
-        }
+		obj, ok := getString(event, "object")
+		if !ok {
+			continue
+		}
 
-        switch obj {
-        case "thread.message.delta":
-            delta, ok := getMap(event, "delta")
-            if !ok {
-                continue
-            }
-            content, ok := getArray(delta, "content")
-            if !ok {
-                continue
-            }
-            for _, part := range content {
-                textPart, ok := part.(map[string]interface{})
-                if !ok {
-                    continue
-                }
-                text, ok := getMap(textPart, "text")
-                if !ok {
-                    continue
-                }
-                value, ok := getString(text, "value")
-                if !ok {
-                    continue
-                }
-                finalMessage += value
-            }
-        case "thread.message.completed":
-            slog.Debug("Сообщение ассистента завершено")
-            break
-        }
-    }
+		switch obj {
+		case "thread.message.delta":
+			delta, ok := getMap(event, "delta")
+			if !ok {
+				continue
+			}
+			content, ok := getArray(delta, "content")
+			if !ok {
+				continue
+			}
+			for _, part := range content {
+				textPart, ok := part.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				text, ok := getMap(textPart, "text")
+				if !ok {
+					continue
+				}
+				value, ok := getString(text, "value")
+				if !ok {
+					continue
+				}
+				finalMessage += value
+			}
+		case "thread.message.completed":
+			slog.Debug("Сообщение ассистента завершено")
+			break
+		}
+	}
 
-    slog.Debug("Собранное сообщение от ассистента", "message", finalMessage)
+	slog.Debug("Собранное сообщение от ассистента", "message", finalMessage)
 
-    if finalMessage == "" {
-        return "", fmt.Errorf("Пустой ответ от ассистента")
-    }
+	if finalMessage == "" {
+		return "", fmt.Errorf("Пустой ответ от ассистента")
+	}
 
-    return finalMessage, nil
+	return finalMessage, nil
 }
 
 // createAndRunAssistantWithStreaming создаёт поток и запускает ассистента с обработкой SSE
 func createAndRunAssistantWithStreaming(assistantID string, messages []map[string]interface{}, vectorStoreID string) (string, error) {
-    requestBody := map[string]interface{}{
-        "assistant_id": assistantID,
-        "thread": map[string]interface{}{
-            "messages": messages,
-        },
-        "tool_resources": map[string]interface{}{
-            "file_search": map[string]interface{}{
-                "vector_store_ids": []string{vectorStoreID},
-            },
-        },
-        "temperature": 1.0,
-        "top_p":       1.0,
-        "stream":      true, // Активируем поток
-    }
+	requestBody := map[string]interface{}{
+		"assistant_id": assistantID,
+		"thread": map[string]interface{}{
+			"messages": messages,
+		},
+		"tool_resources": map[string]interface{}{
+			"file_search": map[string]interface{}{
+				"vector_store_ids": []string{vectorStoreID},
+			},
+		},
+		"temperature": 1.0,
+		"top_p":       1.0,
+		"stream":      true, // Активируем поток
+	}
 
-    reqBody, err := json.Marshal(requestBody)
-    if err != nil {
-        return "", fmt.Errorf("Ошибка создания тела запроса: %v", err)
-    }
+	reqBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("Ошибка создания тела запроса: %v", err)
+	}
 
-    req, err := http.NewRequest("POST", config.ApiURL+"threads/runs", bytes.NewBuffer(reqBody))
-    if err != nil {
-        return "", fmt.Errorf("Ошибка создания HTTP-запроса: %v", err)
-    }
+	req, err := http.NewRequest("POST", config.ApiURL+"threads/runs", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("Ошибка создания HTTP-запроса: %v", err)
+	}
 
-    req.Header.Set("Authorization", "Bearer "+config.APIKey)
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("OpenAI-Beta", "assistants=v2")
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("OpenAI-Beta", "assistants=v2")
 
-    slog.Debug("Отправка запроса к ассистенту", "assistant_id", assistantID)
+	slog.Debug("Отправка запроса к ассистенту", "assistant_id", assistantID)
 
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        return "", fmt.Errorf("Ошибка выполнения HTTP-запроса: %v", err)
-    }
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Ошибка выполнения HTTP-запроса: %v", err)
+	}
 
-    return listenToSSEStream(resp)
+	return listenToSSEStream(resp)
 }
 
 // handleTelegramUpdates обрабатывает запросы Telegram и передает их ассистенту
@@ -492,21 +500,39 @@ func handleTelegramUpdates(bot *tgbotapi.BotAPI, assistantID, vectorStoreID stri
             slog.Info("Получен запрос от пользователя", "user_id", userID, "query", query)
 
             // Обновляем историю сообщений пользователя
+            sessionsMu.RLock()
             session, exists := userSessions[userID]
+            sessionsMu.RUnlock()
+
             if !exists {
                 session = &UserSession{Messages: []map[string]interface{}{}}
+                sessionsMu.Lock()
                 userSessions[userID] = session
+                sessionsMu.Unlock()
             }
 
-            // Добавляем сообщение пользователя в историю
+            // Добавляем сообщение пользователя в историю с блокировкой
+            session.mu.Lock()
             session.Messages = append(session.Messages, map[string]interface{}{
                 "role":    "user",
                 "content": query,
             })
 
+            // Ограничиваем количество сообщений в истории
+            if len(session.Messages) > config.MaxContextMessages {
+                session.Messages = session.Messages[len(session.Messages)-config.MaxContextMessages:]
+            }
+            session.mu.Unlock()
+
             // Обрабатываем каждый запрос в отдельной горутине
             go func(update tgbotapi.Update, userID int64, session *UserSession) {
-                responseContent, err := createAndRunAssistantWithStreaming(assistantID, session.Messages, vectorStoreID)
+                // Копируем историю сообщений с блокировкой
+                session.mu.Lock()
+                messagesCopy := make([]map[string]interface{}, len(session.Messages))
+                copy(messagesCopy, session.Messages)
+                session.mu.Unlock()
+
+                responseContent, err := createAndRunAssistantWithStreaming(assistantID, messagesCopy, vectorStoreID)
                 if err != nil {
                     slog.Error("Ошибка выполнения запроса ассистентом", "error", err)
                     msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка обработки запроса.")
@@ -521,11 +547,18 @@ func handleTelegramUpdates(bot *tgbotapi.BotAPI, assistantID, vectorStoreID stri
                     return
                 }
 
-                // Добавляем ответ ассистента в историю
+                // Добавляем ответ ассистента в историю с блокировкой
+                session.mu.Lock()
                 session.Messages = append(session.Messages, map[string]interface{}{
                     "role":    "assistant",
                     "content": responseContent,
                 })
+
+                // Ограничиваем количество сообщений в истории
+                if len(session.Messages) > config.MaxContextMessages {
+                    session.Messages = session.Messages[len(session.Messages)-config.MaxContextMessages:]
+                }
+                session.mu.Unlock()
 
                 msg := tgbotapi.NewMessage(update.Message.Chat.ID, responseContent)
                 bot.Send(msg)
@@ -585,28 +618,33 @@ func main() {
 	handleTelegramUpdates(bot, assistantID, vectorStoreID)
 }
 
-
 // Вспомогательные функции для получения значений
+// getString извлекает строковое значение из map по заданному ключу.
+// Возвращает строку и булево значение, указывающее, удалось ли получить строку.
 func getString(m map[string]interface{}, key string) (string, bool) {
-    if val, ok := m[key]; ok {
-        str, ok := val.(string)
-        return str, ok
-    }
-    return "", false
+	if val, ok := m[key]; ok {
+		str, ok := val.(string)
+		return str, ok
+	}
+	return "", false
 }
 
+// getMap извлекает значение типа map[string]interface{} из map по заданному ключу.
+// Возвращает карту и булево значение, указывающее, удалось ли получить карту.
 func getMap(m map[string]interface{}, key string) (map[string]interface{}, bool) {
-    if val, ok := m[key]; ok {
-        m2, ok := val.(map[string]interface{})
-        return m2, ok
-    }
-    return nil, false
+	if val, ok := m[key]; ok {
+		m2, ok := val.(map[string]interface{})
+		return m2, ok
+	}
+	return nil, false
 }
 
+// getArray извлекает срез значений типа interface{} из map по заданному ключу.
+// Возвращает срез и булево значение, указывающее, удалось ли получить срез.
 func getArray(m map[string]interface{}, key string) ([]interface{}, bool) {
-    if val, ok := m[key]; ok {
-        arr, ok := val.([]interface{})
-        return arr, ok
-    }
-    return nil, false
+	if val, ok := m[key]; ok {
+		arr, ok := val.([]interface{})
+		return arr, ok
+	}
+	return nil, false
 }
